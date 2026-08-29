@@ -23,13 +23,33 @@ print(f'  Diagonal(1..1e4):{np.linalg.cond(D):.2e}')
 print(f'  Hilbert(5x5):    {np.linalg.cond(H):.2e}\n')
 
 print("%% 3. Catastrophic cancellation")
+# Not the subtraction that is inaccurate: the answer is so small that the error the
+# inputs already carry is the same size as it. Problem 5.
 a = 1.0000000001
 b = 1.0
-exact = a - b
-computed = np.float32(a) - np.float32(b)  # force rounding
+exact  = 1e-10                                 # true difference
+double = a - b
+single = np.float32(a) - np.float32(b)         # force rounding to ~7 digits
+
 print('Catastrophic cancellation:\n')
-print(f'  Exact difference   = {exact:.10e}')
-print(f'  Stored in single   = {computed:.10e}\n')
+print(f'  true a - b        = {exact:.10e}')
+print(f'  double precision  = {double:.10e}   rel. err = {abs(double - exact) / exact:.2e}')
+print(f'  single precision  = {single:.10e}   rel. err = {abs(single - exact) / exact:.2e}\n')
+
+print("%% 3b. Unit roundoff, the gap eps, and the concept check")
+import math
+from decimal import Decimal
+
+print('A', 0.1 + 0.2 == 0.3, ' ', Decimal(0.1 + 0.2), 'vs', Decimal(0.3))
+print('B', 1.0 + 2**-53 == 1.0, ' ', (1.0 + 2**-53).hex())
+print('C', 2**-53 == 0.0, ' ', float(2**-53).hex())
+print('D', (1.0 + 1e16) - 1e16 == 1.0 + (1e16 - 1e16),
+      ' ', (1.0 + 1e16) - 1e16, 'vs', 1.0 + (1e16 - 1e16))
+print()
+print(f'  gap at 1 (numpy eps)      = {np.finfo(float).eps}  = 2**-52')
+print(f'  unit roundoff u           = {2**-53}  = 2**-53')
+print(f'  smallest e with 1+e != 1  = {math.nextafter(2**-53, 1.0)}  = 2**-53 + 2**-105')
+print(f'  gap at 1e16               = {math.ulp(1e16)}   <- the +1 falls off the end')
 
 print("%% 4. Effect of conditioning on solving systems")
 A1 = np.array([[1, 2], [3, 4]])
@@ -44,13 +64,18 @@ print(f'  Solution with A1 (cond={np.linalg.cond(A1):.2e}): x = {x1.T}')
 print(f'  Solution with A2 (cond={np.linalg.cond(A2):.2e}): x = {x2.T}\n')
 
 print("%% 5. Floating-point summation stability")
-n_sum = int(1e6)
-vals = np.concatenate(([1.0], np.full(n_sum, 1e-8)))
-print('Summation order matters:\n')
-sum_forward = np.sum(vals)
-sum_backward = np.sum(vals[::-1]) # large-to-small
-print(f'  Sum small-to-large (approx): {sum_forward:.15e}')
-print(f'  Sum large-to-small:          {sum_backward:.15e}\n')
+# Harmonic series in single precision, summed in both orders (Problem 6 of Chapter 1).
+# np.cumsum accumulates sequentially, so its last entry is the naive running sum;
+# np.sum would use pairwise summation and hide the effect.
+N = 10**7
+terms = np.float32(1.0) / np.arange(1, N + 1, dtype=np.float32)
+large_first = np.cumsum(terms, dtype=np.float32)[-1]            # 1, 1/2, 1/3, ...
+small_first = np.cumsum(terms[::-1], dtype=np.float32)[-1]      # ..., 1/3, 1/2, 1
+reference = np.cumsum(1.0 / np.arange(1, N + 1, dtype=np.float64))[-1]
+print('Summation order matters (harmonic series, N = 1e7):\n')
+print(f'  single precision, large terms first : {large_first:.7f}')
+print(f'  single precision, small terms first : {small_first:.7f}')
+print(f'  double precision (reference)        : {reference:.7f}\n')
 
 
 print("%% 6. Fixed point iterations for SOAR correlation function")
@@ -101,7 +126,20 @@ for k in range(maxit):
         break
 
 # --- SOR
-omega = 2 / (1 + np.sin(np.pi / (n_soar + 1)))  # optimal parameter
+# Numerically search for the omega that minimizes the SOR iteration matrix's
+# spectral radius on THIS matrix C (the Poisson closed-form formula doesn't apply:
+# Young's theorem needs a consistently ordered matrix with real Jacobi eigenvalues,
+# and here Jacobi does not even converge).
+def sor_spectral_radius(w):
+    M_w = (1 / w) * D - L
+    N_w = (1 - w) / w * D + U
+    Gw = np.linalg.solve(M_w, N_w)
+    return np.max(np.abs(np.linalg.eigvals(Gw)))
+
+omega_grid = np.linspace(0.1, 1.99, 100)
+rhos = [sor_spectral_radius(w) for w in omega_grid]
+omega = omega_grid[np.argmin(rhos)]
+print(f'Numerically chosen omega = {omega:.4f} (spectral radius = {min(rhos):.5f})')
 M_sor = (1/omega) * D - L
 N_sor = (1-omega)/omega * D + U
 x = x0.copy()
