@@ -34,14 +34,14 @@ def callback_cg(xk):
 
 x0_cg = np.zeros(n)
 res_c.append(np.linalg.norm(rhs - AtA_op @ x0_cg))
-x_cgne, flag_c = cg(AtA_op, rhs, x0=x0_cg, tol=tol, maxiter=maxit, callback=callback_cg)
+x_cgne, flag_c = cg(AtA_op, rhs, x0=x0_cg, rtol=tol, maxiter=maxit, callback=callback_cg)
 
 # --- Plot residual norms
 plt.semilogy(np.arange(len(res_c)), res_c, 'x-', label='CG on A^T A (NE residual)')
 plt.xlabel('Iteration')
 plt.ylabel('Residual norm')
 plt.title('LSQR vs. CG on normal equations')
-plt.legend(loc='southwest')
+plt.legend(loc='lower left')
 plt.grid(True)
 plt.show()
 

@@ -1,59 +1,52 @@
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import gmres, cg, lsqr, LinearOperator
+from scipy.sparse.linalg import gmres, cg, LinearOperator
+from scipy.sparse.linalg import norm as spla_norm
 import matplotlib.pyplot as plt
 
-# %% Example 1 — GMRES vs. CG-on-normal-equations for a non-symmetric PDE matrix
-# Model: 1D convection–diffusion -nu u'' + beta u' = f (Dirichlet)
-# Discretization: centered Laplacian + first-order upwind for advection
 n = 600
 nu = 1e-2  # diffusion
 beta = 5   # advection (makes A non-symmetric)
 h = 1 / (n + 1)
 e = np.ones(n)
-L = sp.spdiags([-e, 2 * e, -e], [-1, 0, 1], n, n, format='csr') / h**2  # -u''
-U = sp.spdiags([-e, e], [-1, 0], n, n, format='csr') / h  # u' ~ (u_i - u_{i-1})/h
-A = -nu * L + beta * U  # non-symmetric
+L = sp.diags([-e[:-1], 2 * e, -e[:-1]], [-1, 0, 1], format='csr') / h**2  # discrete -u''
+U = sp.diags([-e[:-1], e], [-1, 0], format='csr') / h                    # upwind u' ~ (u_i - u_{i-1})/h
+A = nu * L + beta * U  # discrete -nu u'' + beta u': non-symmetric
 
-b = np.random.randn(n)
+rng = np.random.default_rng(0)   # fixed seed: reproducible numbers
+b = rng.standard_normal(n)
 x0 = np.zeros(n)
 tol = 1e-8
-maxit = 1000
+maxit = 2000
+print(f'||A - A^T||_F / ||A||_F = {spla_norm(A - A.T) / spla_norm(A):.2f}')
 
-# --- Full GMRES (built-in) on Ax=b
-res_gm = []
-def callback_gmres(rk):
-    res_gm.append(np.linalg.norm(rk))
-
-res_gm.append(np.linalg.norm(b - A @ x0))
-x_gmres, flag_gm = gmres(A, b, x0=x0, tol=tol, maxiter=maxit, callback=callback_gmres)
+res_gm = [1.0]   # relative residual norms, ||r_0||/||r_0|| = 1
+x_gmres, flag_gm = gmres(A, b, x0=x0, rtol=tol, restart=n, maxiter=1,
+                         callback=lambda rk: res_gm.append(rk), callback_type='pr_norm')
 iter_gm = len(res_gm) - 1
-rel_gm = res_gm[-1] / res_gm[0]
+rel_gm = np.linalg.norm(b - A @ x_gmres) / np.linalg.norm(b)
 
-# --- CG on normal equations (matrix-free): A^T A x = A^T b
-AtA_op = LinearOperator((n, n), matvec=lambda x: A.T @ (A @ x), rmatvec=lambda x: A.T @ (A @ x))
+AtA_op = LinearOperator((n, n), matvec=lambda x: A.T @ (A @ x))
 rhs = A.T @ b
 
-res_cg = []
+res_cg = [1.0]   # relative residual of the ORIGINAL system, ||b - A x_k|| / ||b||
 def callback_cg(xk):
-    res_cg.append(np.linalg.norm(rhs - AtA_op @ xk))
+    res_cg.append(np.linalg.norm(b - A @ xk) / np.linalg.norm(b))
 
-res_cg.append(np.linalg.norm(rhs - AtA_op @ x0))
-x_cgne, flag_cg = cg(AtA_op, rhs, x0=x0, tol=tol, maxiter=maxit, callback=callback_cg)
+x_cgne, flag_cg = cg(AtA_op, rhs, x0=x0, rtol=tol, maxiter=maxit, callback=callback_cg)
 iter_cg = len(res_cg) - 1
-rel_cg = res_cg[-1] / res_cg[0] if res_cg[0] != 0 else 0.0
+rel_cg = res_cg[-1]
 
-# --- Plot residual histories (2-norm residual; GMRES returns it directly)
 plt.figure()
-plt.semilogy(np.arange(len(res_gm)), res_gm, 'o-', label='GMRES on A')
-plt.semilogy(np.arange(len(res_cg)), res_cg, 'x-', label='CG on A^T A')
+plt.semilogy(np.arange(len(res_gm)), res_gm, '-', label='GMRES on A')
+plt.semilogy(np.arange(len(res_cg)), res_cg, '-', label='CG on A^T A')
 plt.grid(True)
 plt.xlabel('Iteration')
-plt.ylabel('||r_k||_2')
+plt.ylabel('||b - A x_k||_2 / ||b||_2')
 plt.title('GMRES vs. CG on normal equations (convection–diffusion)')
 plt.legend(loc='lower left')
+plt.show()
 
 print('--- GMRES vs. CGNE ---')
-print(f'GMRES: flag={flag_gm}, iters={iter_gm}, relres={rel_gm:.2e}')
+print(f'GMRES:   flag={flag_gm}, iters={iter_gm}, relres={rel_gm:.2e}')
 print(f'CG(AtA): flag={flag_cg}, iters={iter_cg}, relres={rel_cg:.2e}')
-
